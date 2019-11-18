@@ -35,11 +35,12 @@ def token_auth():
 
     _hash = hashlib.sha256("".join([random.choice(string.ascii_letters) for _ in range(20)]).encode()).hexdigest()
     token = base64.urlsafe_b64encode(bytes(_hash, "utf8")).decode()
+    app.open_session(request)
     session["token"] = token
 
     return make_response(
         jsonify(
-            token=token,
+            access_token=token,
             token_tpye="bearer",
             refresh_token="this is the refresh token",
             expires_in=1199),

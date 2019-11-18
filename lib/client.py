@@ -35,34 +35,35 @@ class ThycoticException(Exception):
 
 
 class Client:
-    def __init__(self, requests_tls, address_url, username, password, authenticator):
+    def __init__(self, requests_tls, base_url, username, password, authenticator):
         self.__requests_tls = requests_tls
-        self.__address_url = address_url
+        self.__base_url = base_url
         self.__username = username
         self.__password = password
         self.__authenticator = authenticator
+        self.__headers = {}
 
     @classmethod
     def create(cls, config, gateway_username, gateway_password):
         requests_tls = RequestsTLS.from_config(config)
-        address_url = '{}://{}'.format('https' if requests_tls.tls_enabled else 'http',
+        base_url = '{}://{}'.format('https' if requests_tls.tls_enabled else 'http',
                                        config.get('thycotic', 'address', required=True))
 
         (username, password) = cls.get_username_password(config, gateway_username, gateway_password)
 
         return Client(
             requests_tls=requests_tls,
-            address_url=address_url,
+            base_url=base_url,
             username=username,
             password=password,
-            authenticator=AuthenticatorFactory.create(config)
+            authenticator=Authenticator()
         )
 
     @classmethod
     def get_username_password(cls, config, gateway_username, gateway_password):
         use_credential = config.getienum('thycotic', 'use_credential', ('explicit', 'gateway'), default='gateway')
         if use_credential == 'explicit':
-            return config.get('thycotic', 'username', required=True), config.get('cyberark', 'password', required=True)
+            return config.get('thycotic', 'username', required=True), config.get('thycotic', 'password', required=True)
         else:
             if gateway_username and gateway_password:
                 return gateway_username, gateway_password
@@ -83,45 +84,45 @@ class Client:
                 self.__username,
                 self.__password
             )
-            passwords = self.__get_passwords(session, auth_token, account, asset, gateway_username)
+            self.__headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer {}'.format(auth_token)}
+            # TODO: call __get_secrets with correct parameters
+            passwords = self.__get_passwords(session, account, asset, gateway_username)
             self.__authenticator.logoff(session, self.__address_url)
-        return passwords
 
-    def __get_passwords(self, session, auth_token, account, asset, gateway_username):
-        headers = {'Content-Type': 'application/json', 'Authorization': auth_token}
-        found_objects = _extract_data_from_endpoint(
-            session,
-            endpoint_url=(self.__address_url + '/PasswordVault/api/Accounts?search=' +
-                          ','.join([account, asset]) + '&sort=UserName'),
-            headers=headers,
-            method='get',
-            field_name='value'
-        )
+            return passwords
 
-
-        found_objects = list(filter(lambda x: (account == x.get('userName') and asset == x.get('address')),
-                                    found_objects))
-        if len(found_objects) == 0:
-            logger.debug('No objects found in vault for this account and/or asset: account={}, asset={}'
-                         .format(account, asset))
-            return {'passwords': []}
-
-        pwd_post_data = {
-            'reason': '{},SPS'.format(gateway_username),
-            'TicketingSystemName': '',
-            'TicketId': '',
-            'Version': 0,
-            'ActionType': 'show',
-            'isUse': False,
-            'Machine': asset
-        }
-
-        passwords = []
-        for found_object in found_objects:
-            endpoint_url = self.__address_url + '/PasswordVault/api/Accounts/' + found_object.get('id') + '/Password/Retrieve'
-            passwords.append(_extract_data_from_endpoint(session, endpoint_url, headers, 'post', None, pwd_post_data))
-
+    def __get_passwords(self, session, account, asset, gateway_username):
+        # TODO: rename to __get_secrets and add field_name as parameter
+        endpoint_url = (self.__base_url +
+                        '/api/v1/secrets?filter.includeRestricted=false&filter.searchtext={}'.format(account))
+        user_secrets = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='records')
+        user_secret_ids = [secret['id'] for secret in user_secrets]
+        passwords = [self.__get_secret_content(session, _id, asset, 'password') for _id in user_secret_ids]
         return {'passwords': passwords}
+
+    def __get_secret_content(self, session, secret_id, asset, field_name):
+        endpoint_url = self.__base_url + "/api/v1/secrets/{}".format(secret_id)
+        secret_items = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='items')
+        for item in secret_items:
+            if item['fieldName'] == 'machine':
+                if item['itemValue'] == asset:
+                    break
+                else:
+                    return
+            else:
+                continue
+        else:
+            return
+
+        for item in secret_items:
+            if item['fieldName'] == field_name:
+                return item['itemValue']
+        else:
+            return
+            # list(
+            #     dict(fieldName="machine", itemValue="target.pamint.balabit"),
+            #     dict(fieldName="password", itemValue="titkos"))
+
 
 
 def _extract_data_from_endpoint(session, endpoint_url, headers, method, field_name=None, data=None):
@@ -143,56 +144,81 @@ def _extract_data_from_endpoint(session, endpoint_url, headers, method, field_na
                                 .format(json.loads(response.text).get('ErrorMessage')))
 
 
-class AuthenticatorFactory:
-    @classmethod
-    def create(cls, config):
-        authentication_method = config.getienum(
-            'thycotic',
-            'authentication_method'
-        )
-        return Authenticator(authentication_method)
-
-
 class Authenticator:
-    def __init__(self, auth_type):
-        self._authorization = None
-        self._type = auth_type
-    TYPES = ('thycotic', 'ldap', 'radius', 'windows')
-    TYPE_TO_ENDPOINT = {
-        'thycotic': 'Thycotic',
-        'ldap': 'LDAP',
-        'radius': 'radius',
-        'windows': 'Windows'
-    }
 
-    def authenticate(self, session, base_url, username, password):
-        auth_post_data = {
+    AUTHENTICATION_ENDPOINT = "/ouath2/token"
+    GRANT_TYPE = "password"
+
+    def get_access_token(self, session, base_url, username, password):
+        url = base_url + self.AUTHENTICATION_ENDPOINT
+        data = {
             'username': username,
             'password': password,
-            'grant_type': 'password'
+            'grant_type': self.GRANT_TYPE,
         }
-        self._authorization = _extract_data_from_endpoint(
+        headers = {
+            'Content-type': 'application/x-www-form-urlencoded',
+        }
+        return _extract_data_from_endpoint(
             session,
-            endpoint_url=base_url + '/oauth2/token',
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
-            method='post',
-            data=auth_post_data
-        )
-        return self._authorization
+            url,
+            headers,
+            'post',
+            field_name='access_tokne',
+            data=data)
 
-    def logoff(self, session, url):
-        if self._authorization is None:
-            return
-        logger.debug('Logoff from Thycotic Secret Server; url={}'.format(url))
-        try:
-            response = session.post(
-                url,
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': self._authorization
-                }
-            )
-            if not response.ok:
-                logger.warning('Logoff from Thycotic Secret Server failed; status={}'.format(response.status_code))
-        except requests.exceptions.RequestException as ex:
-            logger.warning('Logoff from Thycotic Secret Server failed; exception={}'.format(ex))
+
+# class AuthenticatorFactory:
+#     @classmethod
+#     def create(cls, config):
+#         authentication_method = config.getienum(
+#             'thycotic',
+#             'authentication_method'
+#         )
+#         return Authenticator(authentication_method)
+
+
+# class Authenticator:
+#     def __init__(self, auth_type):
+#         self._authorization = None
+#         self._type = auth_type
+#     TYPES = ('thycotic', 'ldap', 'radius', 'windows')
+#     TYPE_TO_ENDPOINT = {
+#         'thycotic': 'Thycotic',
+#         'ldap': 'LDAP',
+#         'radius': 'radius',
+#         'windows': 'Windows'
+#     }
+
+#     def authenticate(self, session, base_url, username, password):
+#         auth_post_data = {
+#             'username': username,
+#             'password': password,
+#             'grant_type': 'password'
+#         }
+#         self._authorization = _extract_data_from_endpoint(
+#             session,
+#             endpoint_url=base_url + '/oauth2/token',
+#             headers={'Content-Type': 'application/x-www-form-urlencoded'},
+#             method='post',
+#             data=auth_post_data,
+#             field_name='access_token'
+#         )
+#         return self._authorization
+
+#     def logoff(self, session, url):
+#         if self._authorization is None:
+#             return
+#         logger.debug('Logoff from Thycotic Secret Server; url={}'.format(url))
+#         try:
+#             response = session.post(
+#                 url,
+#                 headers={
+#                     'Content-Type': 'application/json',
+#                     'Authorization': self._authorization
+#                 }
+#             )
+#             if not response.ok:
+#                 logger.warning('Logoff from Thycotic Secret Server failed; status={}'.format(response.status_code))
+#         except requests.exceptions.RequestException as ex:
+#             logger.warning('Logoff from Thycotic Secret Server failed; exception={}'.format(ex))

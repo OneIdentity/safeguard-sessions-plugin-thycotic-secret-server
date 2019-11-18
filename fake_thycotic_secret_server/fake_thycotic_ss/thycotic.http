@@ -2,3 +2,6 @@
 
 # make request to authentication endpoint
 POST :base_url/oauth2/token
+
+#
+GET :base_url/api/v1/secrets?filter.includeRestricted=false&filter.searchtext=thycotic_user&filter.searchField=username

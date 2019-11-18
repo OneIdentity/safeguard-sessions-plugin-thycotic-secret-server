@@ -49,8 +49,7 @@ def token_auth():
 
 @app.route("/api/v1/secrets")
 def secrets():
-    if session.get("token") != _get_token_from_header(request.headers):
-        abort(make_response(jsonify(error="Invalid token")))
+    _check_token()
 
     field_to_search = request.args.get("filter.searchField", "username")
 
@@ -75,6 +74,8 @@ def secrets():
 
 @app.route("/api/v1/secrets/<secret_id>")
 def secret_by_id(secret_id):
+    _check_token()
+
     for _, secret in database.get("secrets", {}).items():
         for _, details in secret.items():
             print(details)
@@ -82,6 +83,12 @@ def secret_by_id(secret_id):
                 return make_response(jsonify(_create_secret_model(details)))
 
     abort(make_response(jsonify(error="No secret found with id")), 400)
+
+
+def _check_token():
+    if session.get("token") != _get_token_from_header(request.headers):
+        abort(make_response(jsonify(error="Invalid token")))
+
 
 def _get_token_from_header(headers):
     auth_header = headers.get("Authorization", "")

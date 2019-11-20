@@ -20,8 +20,8 @@
 # IN THE SOFTWARE.
 #
 import json
-
 import requests
+
 from safeguard.sessions.plugin.exceptions import PluginSDKRuntimeError
 from safeguard.sessions.plugin.requests_tls import RequestsTLS
 from safeguard.sessions.plugin.logging import get_logger
@@ -76,35 +76,47 @@ class Client:
                     }
                 )
 
-    def get_passwords(self, account, asset, gateway_username):
+    def get_passwords(self, account, asset):
+        with self.__requests_tls.open_session() as session:
+            access_token = self.__authenticator.authenticate(
+                session,
+                self.__base_url,
+                self.__username,
+                self.__password
+            )
+            self.__headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer {}'.format(access_token)}
+            passwords = self.__get_secrets(session, account, asset, 'Password')
+            self.__authenticator.logoff(session, self.__base_url)
+
+            return {'passwords': passwords}
+
+    def get_keys(self, account, asset):
         with self.__requests_tls.open_session() as session:
             auth_token = self.__authenticator.authenticate(
                 session,
-                self.__address_url,
+                self.__base_url,
                 self.__username,
                 self.__password
             )
             self.__headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer {}'.format(auth_token)}
-            # TODO: call __get_secrets with correct parameters
-            passwords = self.__get_passwords(session, account, asset, gateway_username)
-            self.__authenticator.logoff(session, self.__address_url)
+            keys = self.__get_secrets(session, account, asset, 'Private key')
+            self.__authenticator.logoff(session, self.__base_url)
 
-            return passwords
+            return {'private_keys': Client.format_keys(keys)}
 
-    def __get_passwords(self, session, account, asset, gateway_username):
-        # TODO: rename to __get_secrets and add field_name as parameter
+    def __get_secrets(self, session, account, asset, field_name):
         endpoint_url = (self.__base_url +
                         '/api/v1/secrets?filter.includeRestricted=false&filter.searchtext={}'.format(account))
         user_secrets = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='records')
         user_secret_ids = [secret['id'] for secret in user_secrets]
-        passwords = [self.__get_secret_content(session, _id, asset, 'password') for _id in user_secret_ids]
-        return {'passwords': passwords}
+        credentials = [self.__get_secret_content(session, _id, asset, field_name) for _id in user_secret_ids]
+        return credentials
 
     def __get_secret_content(self, session, secret_id, asset, field_name):
         endpoint_url = self.__base_url + "/api/v1/secrets/{}".format(secret_id)
         secret_items = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='items')
         for item in secret_items:
-            if item['fieldName'] == 'machine':
+            if item['fieldName'] == 'Machine':
                 if item['itemValue'] == asset:
                     break
                 else:
@@ -119,9 +131,19 @@ class Client:
                 return item['itemValue']
         else:
             return
-            # list(
-            #     dict(fieldName="machine", itemValue="target.pamint.balabit"),
-            #     dict(fieldName="password", itemValue="titkos"))
+
+    @staticmethod
+    def format_keys(keys):
+        return [(Client.determine_keytype(key), key) for key in keys]
+
+    @staticmethod
+    def determine_keytype(key):
+        if key.startswith('-----BEGIN RSA PRIVATE KEY-----'):
+            return 'ssh-rsa'
+        elif key.startswith('-----BEGIN DSA PRIVATE KEY-----'):
+            return 'ssh-dss'
+        else:
+            logger.error('Unsupported key type')
 
 
 
@@ -164,61 +186,5 @@ class Authenticator:
             url,
             headers,
             'post',
-            field_name='access_tokne',
+            field_name='access_token',
             data=data)
-
-
-# class AuthenticatorFactory:
-#     @classmethod
-#     def create(cls, config):
-#         authentication_method = config.getienum(
-#             'thycotic',
-#             'authentication_method'
-#         )
-#         return Authenticator(authentication_method)
-
-
-# class Authenticator:
-#     def __init__(self, auth_type):
-#         self._authorization = None
-#         self._type = auth_type
-#     TYPES = ('thycotic', 'ldap', 'radius', 'windows')
-#     TYPE_TO_ENDPOINT = {
-#         'thycotic': 'Thycotic',
-#         'ldap': 'LDAP',
-#         'radius': 'radius',
-#         'windows': 'Windows'
-#     }
-
-#     def authenticate(self, session, base_url, username, password):
-#         auth_post_data = {
-#             'username': username,
-#             'password': password,
-#             'grant_type': 'password'
-#         }
-#         self._authorization = _extract_data_from_endpoint(
-#             session,
-#             endpoint_url=base_url + '/oauth2/token',
-#             headers={'Content-Type': 'application/x-www-form-urlencoded'},
-#             method='post',
-#             data=auth_post_data,
-#             field_name='access_token'
-#         )
-#         return self._authorization
-
-#     def logoff(self, session, url):
-#         if self._authorization is None:
-#             return
-#         logger.debug('Logoff from Thycotic Secret Server; url={}'.format(url))
-#         try:
-#             response = session.post(
-#                 url,
-#                 headers={
-#                     'Content-Type': 'application/json',
-#                     'Authorization': self._authorization
-#                 }
-#             )
-#             if not response.ok:
-#                 logger.warning('Logoff from Thycotic Secret Server failed; status={}'.format(response.status_code))
-#         except requests.exceptions.RequestException as ex:
-#             logger.warning('Logoff from Thycotic Secret Server failed; exception={}'.format(ex))

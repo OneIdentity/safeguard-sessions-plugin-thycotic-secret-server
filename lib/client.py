@@ -105,19 +105,24 @@ class Client:
             return {'private_keys': Client.format_keys(keys)}
 
     def __get_secrets(self, session, account, asset, field_name):
-        endpoint_url = (self.__base_url +
-                        '/api/v1/secrets?filter.includeRestricted=false&filter.searchtext={}'.format(account))
-        user_secrets = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='records')
+        endpoint_url = (self.__base_url + '/api/v1/secrets')
+        params = {"filter.includeRestricted": "false", "filter.searchtext": account}
+        user_secrets = _extract_data_from_endpoint(session,
+                                                   endpoint_url,
+                                                   self.__headers,
+                                                   'get',
+                                                   field_name='records',
+                                                   params=params)
         user_secret_ids = [secret['id'] for secret in user_secrets]
         credentials = [self.__get_secret_content(session, _id, asset, field_name) for _id in user_secret_ids]
         return credentials
 
     def __get_secret_content(self, session, secret_id, asset, field_name):
         endpoint_url = self.__base_url + "/api/v1/secrets/{}".format(secret_id)
-        secret_items = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='items')
-        for item in secret_items:
-            if item['fieldName'] == 'Machine':
-                if item['itemValue'] == asset:
+        secret_fields = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='items')
+        for field in secret_fields:
+            if field['fieldName'] == 'Machine':
+                if field['itemValue'] == asset:
                     break
                 else:
                     return
@@ -126,9 +131,9 @@ class Client:
         else:
             return
 
-        for item in secret_items:
-            if item['fieldName'] == field_name:
-                return item['itemValue']
+        for field in secret_fields:
+            if field['fieldName'] == field_name:
+                return field['itemValue']
         else:
             return
 
@@ -146,15 +151,17 @@ class Client:
             logger.error('Unsupported key type')
 
 
-
-def _extract_data_from_endpoint(session, endpoint_url, headers, method, field_name=None, data=None):
+def _extract_data_from_endpoint(session, endpoint_url, headers, method, field_name=None, data=None, params=None):
     logger.debug('Sending http request to Thycotic Secret Server, endpoint_url="{}", method="{}"'
                  .format(endpoint_url, method))
     try:
         if method == 'get':
-            response = session.get(endpoint_url, headers=headers)
+            response = session.get(endpoint_url, headers=headers, params=params)
         elif data:
-            response = session.post(endpoint_url, headers=headers, data=json.dumps(data) if data else None)
+            response = session.post(endpoint_url,
+                                    headers=headers,
+                                    data=json.dumps(data) if data else None,
+                                    params=params)
     except requests.exceptions.ConnectionError as exc:
         raise ThycoticException('Connection error: {}'.format(exc))
     if response.ok:

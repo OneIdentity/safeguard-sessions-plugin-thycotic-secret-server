@@ -1,8 +1,30 @@
 [thycotic]
-address=<hostname or ip of the thycotic secret server>
-use_credential=<explicit or gateway>
-username=<username to authenticate with>
-password=<password to authenticate with>
-asset_field_name=Machine
-password_field_name=Password
-private_key_field_name="Private key"
+; address=<hostname or ip of the thycotic secret server>
+; use_credential=<explicit or gateway>
+; username=<username to authenticate with>
+; password=<password to authenticate with>
+; asset_field_name=Machine
+; password_field_name=Password
+; private_key_field_name="Private key"
+
+[tls]
+# To disable TLS completely, enter no as the value of this parameter.
+# Default is yes
+; enabled = yes
+
+# Configure this parameter to enable client-side verification. The certificate shown
+# by the server will be checked with this CA.
+# If the value of this parameter is $[<trusted-ca-list-name>], the certificates are
+# retrieved from the trusted CA list configured on SPS, identified by the name.
+# When the certificate is inserted into the configuration file, it must be in PEM
+# format and all the new lines must be indented with one whitespace. If it is a chain,
+# insert the certificates right after each other.
+; ca_cert = <ca-certificate-chain>
+; ca_cert = $[<trusted-ca-list-name>]
+
+# Configure this parameter to enable server-side verification. If the value of this
+# parameter is $, the certificate identified by the section and option pair is retrieved
+# from the configured Credential Store. When the certificate is inserted into the
+# configuration file, it must be in PEM format and all the new lines must be indented
+# with one whitespace. Note that encrypted keys are not supported.
+; client_cert = <client-certificate-and-key>

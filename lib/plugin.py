@@ -31,29 +31,20 @@ class Plugin(CredentialStorePlugin):
 
     def __init__(self, configuration):
         super().__init__(configuration)
+        self.__client = Client.create(self.plugin_configuration,
+                                      self.connection.gateway_user,
+                                      self.connection.gateway_password)
 
     def do_get_password_list(self):
         try:
-            thycotic_client = Client.create(self.plugin_configuration,
-                                            self.connection.gateway_username,
-                                            self.connection.gateway_password
-                                            )
-
-            return thycotic_client.get_passwords(self.account, self.asset, self.connection.gateway_username)
-
+            return self.__client.get_passwords(self.account, self.asset, self.connection.gateway_username)
         except PluginSDKRuntimeError as ex:
             self.logger.error("Error retrieving passwords: {}".format(ex))
             return None
 
     def do_get_private_key_list(self):
         try:
-            thycotic_client = Client.create(self.plugin_configuration,
-                                            self.connection.gateway_username,
-                                            self.connection.gateway_password
-                                            )
-
-            return thycotic_client.get_private_keys(self.account, self.asset, self.connection.gateway_username)
-
+            return self.__client.get_private_keys(self.account, self.asset, self.connection.gateway_username)
         except PluginSDKRuntimeError as ex:
             self.logger.error("Error retrieving passwords: {}".format(ex))
             return None

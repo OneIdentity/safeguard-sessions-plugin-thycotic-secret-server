@@ -1,0 +1,8 @@
+[thycotic]
+address=<hostname or ip of the thycotic secret server>
+use_credential=<explicit or gateway>
+username=<username to authenticate with>
+password=<password to authenticate with>
+asset_field_name=Machine
+password_field_name=Password
+private_key_field_name="Private key"

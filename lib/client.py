@@ -35,11 +35,12 @@ class ThycoticException(Exception):
 
 
 class Client:
-    def __init__(self, requests_tls, base_url, username, password, authenticator):
+    def __init__(self, requests_tls, base_url, username, password, field_names, authenticator):
         self.__requests_tls = requests_tls
         self.__base_url = base_url
         self.__username = username
         self.__password = password
+        self.__field_names = field_names
         self.__authenticator = authenticator
         self.__headers = {}
 
@@ -47,15 +48,21 @@ class Client:
     def create(cls, config, gateway_username, gateway_password):
         requests_tls = RequestsTLS.from_config(config)
         base_url = '{}://{}'.format('https' if requests_tls.tls_enabled else 'http',
-                                       config.get('thycotic', 'address', required=True))
+                                    config.get('thycotic', 'address', required=True))
 
         (username, password) = cls.get_username_password(config, gateway_username, gateway_password)
 
+        field_names = dict(
+            asset_field_name=config.get('thycotic', 'asset_field_name', default="Machine"),
+            password_field_name=config.get('thycotic', 'password_field_name', default="Password"),
+            private_key_field_name=config.get('thycotic', 'private_key_field_name', default="Private key"),
+        )
         return Client(
             requests_tls=requests_tls,
             base_url=base_url,
             username=username,
             password=password,
+            field_names=field_names,
             authenticator=Authenticator()
         )
 
@@ -85,7 +92,10 @@ class Client:
                 self.__password
             )
             self.__headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer {}'.format(access_token)}
-            passwords = self.__get_secrets(session, account, asset, 'Password')
+            passwords = self.__get_secrets(session,
+                                           account,
+                                           asset,
+                                           self.__field_names['password_field_name'])
             self.__authenticator.logoff(session, self.__base_url)
 
             return {'passwords': passwords}
@@ -99,7 +109,10 @@ class Client:
                 self.__password
             )
             self.__headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer {}'.format(auth_token)}
-            keys = self.__get_secrets(session, account, asset, 'Private key')
+            keys = self.__get_secrets(session,
+                                      account,
+                                      asset,
+                                      self.__field_names['private_key_field_name'])
             self.__authenticator.logoff(session, self.__base_url)
 
             return {'private_keys': Client.format_keys(keys)}
@@ -121,7 +134,7 @@ class Client:
         endpoint_url = self.__base_url + "/api/v1/secrets/{}".format(secret_id)
         secret_fields = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='items')
         for field in secret_fields:
-            if field['fieldName'] == 'Machine':
+            if field['fieldName'].lower() == self.__field_names["asset_field_name"].lower():
                 if field['itemValue'] == asset:
                     break
                 else:
@@ -132,7 +145,7 @@ class Client:
             return
 
         for field in secret_fields:
-            if field['fieldName'] == field_name:
+            if field['fieldName'].lower() == field_name.lower():
                 return field['itemValue']
         else:
             return

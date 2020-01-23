@@ -23,7 +23,7 @@ import json
 import requests
 
 from safeguard.sessions.plugin.exceptions import PluginSDKRuntimeError
-from safeguard.sessions.plugin.requests_tls import RequestsTLS
+from .requests_tls import RequestsTLS
 from safeguard.sessions.plugin.logging import get_logger
 
 
@@ -47,7 +47,7 @@ class Client:
     @classmethod
     def create(cls, config, gateway_username, gateway_password):
         requests_tls = RequestsTLS.from_config(config)
-        base_url = '{}://{}'.format('https' if requests_tls.tls_enabled else 'http',
+        base_url = '{}://{}/SecretServer'.format('https' if requests_tls.tls_enabled else 'http',
                                     config.get('thycotic', 'address', required=True))
 
         (username, password) = cls.get_username_password(config, gateway_username, gateway_password)
@@ -85,7 +85,7 @@ class Client:
 
     def get_passwords(self, account, asset):
         with self.__requests_tls.open_session() as session:
-            access_token = self.__authenticator.authenticate(
+            access_token = self.__authenticator.get_access_token(
                 session,
                 self.__base_url,
                 self.__username,
@@ -102,7 +102,7 @@ class Client:
 
     def get_keys(self, account, asset):
         with self.__requests_tls.open_session() as session:
-            auth_token = self.__authenticator.authenticate(
+            auth_token = self.__authenticator.get_access_token(
                 session,
                 self.__base_url,
                 self.__username,
@@ -128,13 +128,13 @@ class Client:
                                                    params=params)
         user_secret_ids = [secret['id'] for secret in user_secrets]
         credentials = [self.__get_secret_content(session, _id, asset, field_name) for _id in user_secret_ids]
-        return credentials
+        return [cred for cred in credentials if cred is not None]
 
     def __get_secret_content(self, session, secret_id, asset, field_name):
         endpoint_url = self.__base_url + "/api/v1/secrets/{}".format(secret_id)
         secret_fields = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='items')
         for field in secret_fields:
-            if field['fieldName'].lower() == self.__field_names["asset_field_name"].lower():
+            if field['fieldName'] in ('Machine', 'Domain'):
                 if field['itemValue'] == asset:
                     break
                 else:
@@ -186,9 +186,30 @@ def _extract_data_from_endpoint(session, endpoint_url, headers, method, field_na
                                 .format(json.loads(response.text).get('ErrorMessage')))
 
 
-class Authenticator:
+def _extract_data_from_endpoint_form(session, endpoint_url, headers, method, field_name=None, data=None, params=None):
+    logger.debug('Sending http request to Thycotic Secret Server, endpoint_url="{}", method="{}"'
+                 .format(endpoint_url, method))
+    try:
+        if method == 'get':
+            response = session.get(endpoint_url, headers=headers, params=params)
+        elif data:
+            response = session.post(endpoint_url,
+                                    headers=headers,
+                                    data=data if data else None,
+                                    params=params)
+    except requests.exceptions.ConnectionError as exc:
+        raise ThycoticException('Connection error: {}'.format(exc))
+    if response.ok:
+        logger.debug('Got correct response from endpoint: {}'.format(endpoint_url))
+        content = json.loads(response.text)
+        return content.get(field_name) if field_name else content
+    else:
+        raise ThycoticException('Received error from Thycotic Secret Server: {}'
+                                .format(json.loads(response.text).get('ErrorMessage')))
 
-    AUTHENTICATION_ENDPOINT = "/ouath2/token"
+
+class Authenticator:
+    AUTHENTICATION_ENDPOINT = "/oauth2/token"
     GRANT_TYPE = "password"
 
     def get_access_token(self, session, base_url, username, password):
@@ -199,12 +220,15 @@ class Authenticator:
             'grant_type': self.GRANT_TYPE,
         }
         headers = {
-            'Content-type': 'application/x-www-form-urlencoded',
+            'Content-Type': 'application/x-www-form-urlencoded',
         }
-        return _extract_data_from_endpoint(
+        return _extract_data_from_endpoint_form(
             session,
             url,
             headers,
             'post',
             field_name='access_token',
             data=data)
+
+    def logoff(self, session, base_url):
+        pass

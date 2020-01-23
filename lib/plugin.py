@@ -22,6 +22,7 @@
 
 from safeguard.sessions.plugin import PluginSDKRuntimeError
 from safeguard.sessions.plugin.credentialstore_plugin import CredentialStorePlugin
+from safeguard.sessions.plugin.host_resolver import HostResolver
 
 from .client import Client
 
@@ -31,20 +32,44 @@ class Plugin(CredentialStorePlugin):
 
     def __init__(self, configuration):
         super().__init__(configuration)
+        self._domain_suffix = self.plugin_configuration.get('thycotic', 'domain_suffix')
+
+    def _generate_assets(self):
+        target_domain = self.connection.target_domain
+        target_host = self.connection.target_ip
+
+        yield target_host
+
+        if self.plugin_configuration.getboolean('thycotic', 'ip_resolving'):
+            resolved_hosts = HostResolver.from_config(self.plugin_configuration).resolve_hosts_by_ip(target_host)
+            for host in resolved_hosts:
+                yield host
+
+        if target_domain:
+            if self._domain_suffix:
+                target_domain = '%s.%s' % (target_domain, self._domain_suffix)
+
+            yield target_domain
+
+            if self.plugin_configuration.get('domain_asset_mapping', target_domain):
+                yield self.plugin_configuration.get('domain_asset_mapping', target_domain)
+
+    def do_get_password_list(self):
         self.__client = Client.create(self.plugin_configuration,
                                       self.connection.gateway_user,
                                       self.connection.gateway_password)
-
-    def do_get_password_list(self):
         try:
-            return self.__client.get_passwords(self.account, self.asset, self.connection.gateway_username)
+            return self.__client.get_passwords(self.account, self.asset)
         except PluginSDKRuntimeError as ex:
             self.logger.error("Error retrieving passwords: {}".format(ex))
             return None
 
     def do_get_private_key_list(self):
+        self.__client = Client.create(self.plugin_configuration,
+                                      self.connection.gateway_user,
+                                      self.connection.gateway_password)
         try:
-            return self.__client.get_private_keys(self.account, self.asset, self.connection.gateway_username)
+            return self.__client.get_keys(self.account, self.asset)
         except PluginSDKRuntimeError as ex:
             self.logger.error("Error retrieving passwords: {}".format(ex))
             return None

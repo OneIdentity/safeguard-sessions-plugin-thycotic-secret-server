@@ -38,21 +38,21 @@ class Plugin(CredentialStorePlugin):
         target_domain = self.connection.target_domain
         target_host = self.connection.target_ip
 
-        yield target_host
+        yield {'search_field': 'Machine', 'value': target_host}
 
         if self.plugin_configuration.getboolean('thycotic', 'ip_resolving'):
             resolved_hosts = HostResolver.from_config(self.plugin_configuration).resolve_hosts_by_ip(target_host)
             for host in resolved_hosts:
-                yield host
+                yield {'search_field': 'Machine', 'value': host}
 
         if target_domain:
             if self._domain_suffix:
                 target_domain = '%s.%s' % (target_domain, self._domain_suffix)
 
-            yield target_domain
+            yield {'search_field': 'Domain', 'value': target_domain}
 
             if self.plugin_configuration.get('domain_asset_mapping', target_domain):
-                yield self.plugin_configuration.get('domain_asset_mapping', target_domain)
+                yield {'search_field': 'Domain', 'value': self.plugin_configuration.get('domain_asset_mapping', target_domain)}
 
     def do_get_password_list(self):
         self.__client = Client.create(self.plugin_configuration,

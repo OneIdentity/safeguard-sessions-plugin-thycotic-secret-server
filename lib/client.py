@@ -95,7 +95,7 @@ class Client:
             passwords = self.__get_secrets(session,
                                            account,
                                            asset,
-                                           self.__field_names['password_field_name'])
+                                           'password')
             self.__authenticator.logoff(session, self.__base_url)
 
             return {'passwords': passwords}
@@ -112,47 +112,72 @@ class Client:
             keys = self.__get_secrets(session,
                                       account,
                                       asset,
-                                      self.__field_names['private_key_field_name'])
+                                      'private-key')
             self.__authenticator.logoff(session, self.__base_url)
 
             return {'private_keys': Client.format_keys(keys)}
 
     def __get_secrets(self, session, account, asset, field_name):
-        endpoint_url = (self.__base_url + '/api/v1/secrets')
-        params = {"filter.includeRestricted": "false", "filter.searchtext": account}
+        endpoint_url = (self.__base_url + '/api/v1/secrets/lookup')
+        params = {
+            "filter.includeRestricted": "false",
+            "filter.searchfield": "Username",
+            "filter.searchtext": account,
+            "take": "10000"
+        }
         user_secrets = _extract_data_from_endpoint(session,
                                                    endpoint_url,
                                                    self.__headers,
                                                    'get',
                                                    field_name='records',
                                                    params=params)
-        user_secret_ids = [secret['id'] for secret in user_secrets]
-        credentials = [self.__get_secret_content(session, _id, asset, field_name) for _id in user_secret_ids]
+        user_secret_ids = [secret['id'] for secret in user_secrets if 'id' in secret]
+
+        params = {
+            "filter.includeRestricted": "false",
+            "filter.searchfield": asset.get("search_field", "Machine"),
+            "filter.searchtext": asset.get("value", ""),
+            "take": "10000"
+        }
+        asset_secrets = _extract_data_from_endpoint(
+            session,
+            endpoint_url,
+            self.__headers,
+            'get',
+            field_name='records',
+            params=params
+        )
+        asset_secret_ids = [secret['id'] for secret in asset_secrets if 'id' in secret]
+
+        result_secret_ids = [id for id in user_secret_ids if id in asset_secret_ids]
+
+        credentials = [self.__get_secret_content(session, id, field_name) for id in result_secret_ids]
         return [cred for cred in credentials if cred is not None]
 
-    def __get_secret_content(self, session, secret_id, asset, field_name):
-        endpoint_url = self.__base_url + "/api/v1/secrets/{}".format(secret_id)
-        secret_fields = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='items')
-        for field in secret_fields:
-            if field['fieldName'] in ('Machine', 'Domain'):
-                if field['itemValue'] == asset:
-                    break
-                else:
-                    return
-            else:
-                continue
-        else:
-            return
+    def __get_secret_content(self, session, secret_id, field_name):
+        endpoint_url = self.__base_url + "/api/v1/secrets/{}/fields/{}".format(secret_id, field_name)
 
-        for field in secret_fields:
-            if field['fieldName'].lower() == field_name.lower():
-                return field['itemValue']
+        response = session.get(endpoint_url, headers=self.__headers)
+
+        if response.ok:
+            if 'application/json' in response.headers['Content-Type']:
+                return json.loads(response.text)
+            else:
+                return response.text
         else:
             return
+        
+        #secret_fields = _extract_data_from_endpoint(session, endpoint_url, self.__headers, 'get', field_name='items')
+
+        #for field in secret_fields:
+        #    if field['fieldName'].lower() == field_name.lower():
+        #        return field['itemValue']
+        #else:
+        #    return
 
     @staticmethod
     def format_keys(keys):
-        return [(Client.determine_keytype(key), key) for key in keys]
+        return [(Client.determine_keytype(key), key.replace('\r', '')) for key in keys if Client.determine_keytype(key) is not None]
 
     @staticmethod
     def determine_keytype(key):
